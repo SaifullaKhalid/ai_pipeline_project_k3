@@ -1,0 +1,118 @@
+version: 2.1
+
+orbs:
+  python: circleci/python@2.4.0
+
+jobs:
+  checkout-and-prepare:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - run:
+          name: Install tools (kubectl, base64, python)
+          command: |
+            # install kubectl
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/
+            python3 -m pip install --upgrade pip
+            pip3 install requests
+
+  deploy-and-run-k6:
+    docker:
+      - image: cimg/python:3.11
+    environment:
+      # optional defaults — real values come from Project env vars
+      KUBECONFIG: /tmp/kubeconfig
+    steps:
+      - checkout
+      - run:
+          name: Restore kubeconfig from env
+          command: |
+            if [ -z "${KUBE_CONFIG_DATA}" ]; then
+              echo "KUBE_CONFIG_DATA not set"
+              exit 1
+            fi
+            echo "$KUBE_CONFIG_DATA" | base64 --decode > /tmp/kubeconfig
+            export KUBECONFIG=/tmp/kubeconfig
+            kubectl version --client
+      - run:
+          name: Apply K6 job to cluster
+          command: |
+            kubectl apply -f k8s/k6-job.yaml
+      - run:
+          name: Wait for pod to complete (30s timeout)
+          command: |
+            POD=$(kubectl get pods -l job-name=k6-demo -o jsonpath='{.items[0].metadata.name}')
+            echo "Waiting for pod $POD to complete..."
+            kubectl wait --for=condition=ready pod/$POD --timeout=60s || true
+            # if Completed state might be not 'ready' -> poll until completion
+            for i in $(seq 1 30); do
+              STATUS=$(kubectl get pod $POD -o jsonpath='{.status.phase}')
+              echo "Pod status: $STATUS"
+              [ "$STATUS" = "Succeeded" ] && break
+              sleep 2
+            done
+      - run:
+          name: Save K6 logs to file
+          command: |
+            POD=$(kubectl get pods -l job-name=k6-demo -o jsonpath='{.items[0].metadata.name}')
+            kubectl logs $POD > k6-output.log || true
+            echo "Saved logs to k6-output.log"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - k6-output.log
+            - k8s
+            - k6
+
+  ai-and-speedcurve:
+    docker:
+      - image: cimg/python:3.11
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install python deps
+          command: |
+            python3 -m pip install --upgrade pip
+            pip3 install requests
+      - run:
+          name: Call AI API and receive payload
+          command: |
+            set -e
+            # run python script - it expects OPENAI_KEY in env
+            python3 ci/ai_call.py --out ai_response.json
+            cat ai_response.json
+      - run:
+          name: Call SpeedCurve with AI results
+          command: |
+            python3 ci/speedcurve_post.py --input ai_response.json --out speedcurve_response.json
+            cat speedcurve_response.json
+      - run:
+          name: Save artifacts for CircleCI
+          command: |
+            cp ai_response.json ai_response.json || true
+            cp speedcurve_response.json speedcurve_response.json || true
+      - store_artifacts:
+          path: ai_response.json
+          destination: ai_response.json
+      - store_artifacts:
+          path: speedcurve_response.json
+          destination: speedcurve_response.json
+      - store_artifacts:
+          path: k6-output.log
+          destination: k6-output.log
+
+workflows:
+  version: 2
+  build-and-test:
+    jobs:
+      - checkout-and-prepare
+      - deploy-and-run-k6:
+          requires:
+            - checkout-and-prepare
+      - ai-and-speedcurve:
+          requires:
+            - deploy-and-run-k6
