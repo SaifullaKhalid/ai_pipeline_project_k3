@@ -1,7 +1,7 @@
 version: 2.1
 
 orbs:
-  python: circleci/python@2.4.0
+  python: circleci/python@3.3.0
 
 jobs:
   checkout-and-prepare:
