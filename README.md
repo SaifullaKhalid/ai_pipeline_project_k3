@@ -28,3 +28,6 @@ Set these in the CircleCI project settings -> Environment Variables:
 ## Notes
 - For EKS, you can generate kubeconfig with `aws eks update-kubeconfig` and then set `KUBE_CONFIG_DATA`.
 - For SpeedCurve API specifics, provide exact API docs / credentials to integrate precisely.
+
+## My Notes
+
