@@ -1,20 +1,29 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: k6-demo
+  name: k6-load-test
+  namespace: k6
 spec:
+  backoffLimit: 0
   template:
     spec:
+      restartPolicy: Never
       containers:
       - name: k6
         image: grafana/k6:latest
-        command: ["k6", "run", "/scripts/test.js"]
+        command:
+        - sh
+        - -c
+        - |
+          echo "Running all k6 tests..."
+          for f in /scripts/*.js; do
+            echo "▶ Running $f"
+            k6 run $f || exit 1
+          done
         volumeMounts:
         - name: scripts
           mountPath: /scripts
-      restartPolicy: Never
       volumes:
       - name: scripts
         configMap:
           name: k6-scripts
-  backoffLimit: 0

@@ -1,47 +1,27 @@
-#!/usr/bin/env python3
-import os, sys, json, argparse, requests
+import time
+import os, json, requests
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--input', default='ai_response.json')
-parser.add_argument('--out', default='speedcurve_response.json')
-args = parser.parse_args()
+key = os.getenv("SPEEDCURVE_KEY")
+site = os.getenv("SPEEDCURVE_SITE_ID")
 
-SPEEDCURVE_KEY = os.getenv('SPEEDCURVE_KEY')
-SPEEDCURVE_SITE = os.getenv('SPEEDCURVE_SITE_ID')
-SPEEDCURVE_API_URL = os.getenv('SPEEDCURVE_API_URL', 'https://api.speedcurve.com/v1')  # placeholder
-
-if not SPEEDCURVE_KEY or not SPEEDCURVE_SITE:
-    print("SPEEDCURVE_KEY or SPEEDCURVE_SITE_ID not set", file=sys.stderr)
-    sys.exit(1)
-
-# read the AI response (optional)
-ai = {}
-if os.path.exists(args.input):
-    ai = json.load(open(args.input))
-
-# Example: post a synthetic test run. Replace with the real SpeedCurve endpoint.
+url = "https://api.speedcurve.com/v1/deploys"
+auth = (key, "")
 payload = {
-    "site_id": SPEEDCURVE_SITE,
-    "notes": "Triggered by CI pipeline. AI summary: " + (ai.get('choices', [{}])[0].get('message', {}).get('content','')[:200] if ai else "")
+    "site_id": site,
+    "note": "CircleCI trigger"
 }
 
-headers = {
-    "Authorization": f"Bearer {SPEEDCURVE_KEY}",
-    "Content-Type": "application/json"
-}
+def trigger_deploy():
+    resp = requests.post(url, auth=auth, json=payload)
+    if resp.status_code == 403:
+        print("Deploy in progress. Waiting 90 seconds...")
+        time.sleep(90)
+        return trigger_deploy()  # retry
+    return resp
 
-# Example endpoint path — adjust to real SpeedCurve API endpoints your team uses:
-url = f"{SPEEDCURVE_API_URL}/sites/{SPEEDCURVE_SITE}/runs"
+resp = trigger_deploy()
 
-r = requests.post(url, json=payload, headers=headers, timeout=60)
-# if they use a different endpoint, update 'url' variable
-try:
-    r.raise_for_status()
-    result = r.json()
-except Exception as e:
-    result = {"error": str(e), "status_code": getattr(r, "status_code", None), "text": r.text}
+with open("speedcurve_response.json", "w") as f:
+    json.dump({"status": resp.status_code, "body": resp.text}, f, indent=2)
 
-with open(args.out, 'w') as f:
-    json.dump(result, f, indent=2)
-
-print("SpeedCurve response saved to", args.out)
+print("Done.")
